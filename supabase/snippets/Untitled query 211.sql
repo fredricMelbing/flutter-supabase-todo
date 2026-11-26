@@ -1,1 +1,0 @@
-update public.profiles set is_admin = true where username = 'admin';

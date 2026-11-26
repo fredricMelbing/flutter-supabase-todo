@@ -54,3 +54,6 @@ config/*.json
 # Supabase CLI local state
 supabase/.temp/
 supabase/.branches/
+
+# Supabase Studio local SQL snippets
+supabase/snippets/
