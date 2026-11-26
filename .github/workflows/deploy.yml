@@ -42,7 +42,7 @@ jobs:
       # Build first: a compile error should stop the pipeline before the database is touched
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: 3.50.1
           cache: true
 
       - name: Build web app
@@ -54,13 +54,15 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned so a new CLI release cannot change behaviour unexpectedly
+          version: 3.4.0
 
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Apply database migrations
-        run: supabase db push
+        # --remote is required: newer CLI versions target the local stack by default
+        run: supabase db push --remote
 
       - name: Push auth config
         run: supabase config push --yes
