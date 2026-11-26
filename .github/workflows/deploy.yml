@@ -1,0 +1,72 @@
+name: Deploy
+
+on:
+  push:
+    branches: [develop, main]
+  # Allows a manual run from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # main -> production, everything else -> test.
+    # Branch rules on the environments block any other branch from using them.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'test' }}
+
+    # Never run two deploys against the same database at the same time
+    concurrency: deploy-${{ github.ref_name }}
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify configuration
+        run: |
+          # Fail fast instead of deploying with missing values
+          missing=0
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_PUBLISHABLE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      # Build first: a compile error should stop the pipeline before the database is touched
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build web app
+        run: |
+          flutter pub get
+          flutter build web --release \
+            --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+            --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Apply database migrations
+        run: supabase db push
+
+      - name: Push auth config
+        run: supabase config push --yes
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ github.ref_name }}
+          path: build/web
