@@ -1,0 +1,99 @@
+name: Deploy
+
+on:
+  push:
+    branches: [develop, main]
+    # Run tests (but not deploy) on pull requests
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install packages
+        run: flutter pub get
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit and widget tests
+        run: flutter test
+
+  deploy:
+    # Only deploy if all tests passed
+    needs: test
+    # Pull requests only run the tests
+    if: github.event_name != 'pull_request'    
+    runs-on: ubuntu-latest
+
+    # main -> production, everything else -> test.
+    # Branch rules on the environments block any other branch from using them.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'test' }}
+
+    # Never run two deploys against the same database at the same time
+    concurrency: deploy-${{ github.ref_name }}
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify configuration
+        run: |
+          # Fail fast instead of deploying with missing values
+          missing=0
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_PUBLISHABLE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      # Build first: a compile error should stop the pipeline before the database is touched
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.50.1
+          cache: true
+
+      - name: Build web app
+        run: |
+          flutter pub get
+          flutter build web --release \
+            --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+            --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
+
+      - uses: supabase/setup-cli@v1
+        with:
+          # Pinned so a new CLI release cannot change behaviour unexpectedly
+          version: 3.4.0
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Apply database migrations
+        # --remote is required: newer CLI versions target the local stack by default
+        run: supabase db push --remote
+
+      - name: Push auth config
+        run: supabase config push --yes
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ github.ref_name }}
+          path: build/web
