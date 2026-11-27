@@ -65,8 +65,7 @@ jobs:
         run: supabase db push --remote
 
       - name: Push auth config
-        # --debug is temporary, to find out why the step fails silently
-        run: supabase config push --yes --debug
+        run: supabase config push --yes
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
